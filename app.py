@@ -14,14 +14,55 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
 
 # ============ البيانات ============
-SOURCES = [
-    {"id": 1, "name": "المستشار", "username": "Almustashaar", "url": "https://t.me/Almustashaar", "active": True},
-    {"id": 2, "name": "صوت الحرب", "username": "sawtl7arb", "url": "https://t.me/sawtl7arb", "active": True},
-    {"id": 3, "name": "تسريبات الحروب", "username": "WarsLeaks", "url": "https://t.me/WarsLeaks", "active": True},
-    {"id": 4, "name": "نايا للعراق", "username": "nayaforiraq", "url": "https://t.me/nayaforiraq", "active": True}
-]
+import re
 
-NEWS = []
+DATA_FILE = '/tmp/ma_waraa_data.json'
+
+def load_data():
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except:
+        pass
+    return {
+        "sources": [
+            {"id": 1, "name": "المستشار", "username": "Almustashaar", "active": True},
+            {"id": 2, "name": "صوت الحرب", "username": "sawtl7arb", "active": True},
+            {"id": 3, "name": "تسريبات الحروب", "username": "WarsLeaks", "active": True},
+            {"id": 4, "name": "نايا للعراق", "username": "nayaforiraq", "active": True}
+        ],
+        "news": [],
+        "fetched_news": []
+    }
+
+def save_data(data):
+    try:
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except:
+        pass
+
+def fetch_channel_messages(username):
+    try:
+        url = f"https://t.me/s/{username}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            messages = []
+            pattern = r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>'
+            matches = re.findall(pattern, response.text, re.DOTALL)
+            for match in matches[:5]:
+                clean_text = re.sub(r'<[^>]+>', '', match).strip()
+                if clean_text and len(clean_text) > 20:
+                    messages.append({'text': clean_text, 'source': username})
+            return messages
+    except:
+        pass
+    return []
+
+SOURCES = load_data().get('sources', [])
+NEWS = load_data().get('news', [])
 
 # ============ قاموس الأعلام ============
 FLAGS = {
@@ -204,11 +245,19 @@ HTML = '''
         
         <div id="sources" class="section">
             <h2>📡 إدارة المصادر</h2>
-            <p style="color: #8899a6; margin-bottom: 20px;">المصادر التي يجلب منها النظام الأخبار:</p>
-            <div class="source-item"><div class="source-info"><h4>المستشار</h4><span>@Almustashaar</span></div><span class="status-badge status-active">✓ نشط</span></div>
-            <div class="source-item"><div class="source-info"><h4>صوت الحرب</h4><span>@sawtl7arb</span></div><span class="status-badge status-active">✓ نشط</span></div>
-            <div class="source-item"><div class="source-info"><h4>تسريبات الحروب</h4><span>@WarsLeaks</span></div><span class="status-badge status-active">✓ نشط</span></div>
-            <div class="source-item"><div class="source-info"><h4>نايا للعراق</h4><span>@nayaforiraq</span></div><span class="status-badge status-active">✓ نشط</span></div>
+            <div style="background: #0f1419; padding: 20px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #2d4a5e;">
+                <h3 style="color: #27ae60; margin-bottom: 15px;">➕ إضافة مصدر جديد</h3>
+                <input type="text" id="new-source-name" placeholder="اسم المصدر (مثال: قناة الأخبار)">
+                <input type="text" id="new-source-username" placeholder="يوزرنيم القناة (مثال: news_channel)">
+                <button class="btn btn-success" onclick="addSource()">➕ إضافة المصدر</button>
+            </div>
+            <h3 style="margin-bottom: 15px; color: #e74c3c;">📡 المصادر الحالية:</h3>
+            <div id="sources-list"></div>
+            <div style="margin-top: 20px;">
+                <button class="btn" onclick="fetchNews()">🔄 جلب الأخبار من المصادر</button>
+            </div>
+            <div id="fetch-status" style="margin-top: 15px;"></div>
+            <div id="fetched-news" style="margin-top: 20px;"></div>
         </div>
         
         <div id="news" class="section">
@@ -339,6 +388,76 @@ HTML = '''
         });
         
         loadNews();
+        loadSources();
+        
+        function loadSources() {
+            fetch('/api/sources').then(r => r.json()).then(sources => {
+                const html = sources.map(s => `
+                    <div class="source-item">
+                        <div class="source-info"><h4>${s.name}</h4><span>@${s.username}</span></div>
+                        <div>
+                            <span class="status-badge ${s.active ? 'status-active' : ''}" style="${!s.active ? 'background:#e74c3c;' : ''}">${s.active ? '✓ نشط' : '✗ معطل'}</span>
+                            <button class="btn" style="padding: 5px 10px; margin-right: 5px;" onclick="toggleSource(${s.id})">${s.active ? 'تعطيل' : 'تفعيل'}</button>
+                            <button class="btn" style="padding: 5px 10px; background: #e74c3c;" onclick="deleteSource(${s.id})">حذف</button>
+                        </div>
+                    </div>
+                `).join('');
+                document.getElementById('sources-list').innerHTML = html || '<p style="color: #8899a6;">لا توجد مصادر</p>';
+            });
+        }
+        
+        function addSource() {
+            const name = document.getElementById('new-source-name').value;
+            const username = document.getElementById('new-source-username').value.replace('@', '');
+            if (!name || !username) { alert('الرجاء إدخال اسم المصدر واليوزرنيم'); return; }
+            fetch('/api/sources', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name, username}) })
+            .then(r => r.json()).then(() => {
+                document.getElementById('new-source-name').value = '';
+                document.getElementById('new-source-username').value = '';
+                loadSources();
+                alert('تم إضافة المصدر بنجاح!');
+            });
+        }
+        
+        function toggleSource(id) {
+            fetch(`/api/sources/${id}/toggle`, { method: 'POST' }).then(() => loadSources());
+        }
+        
+        function deleteSource(id) {
+            if (confirm('هل أنت متأكد من حذف هذا المصدر؟')) {
+                fetch(`/api/sources/${id}`, { method: 'DELETE' }).then(() => loadSources());
+            }
+        }
+        
+        function fetchNews() {
+            document.getElementById('fetch-status').innerHTML = '<div class="loading show"><div class="spinner"></div><p>جاري جلب الأخبار...</p></div>';
+            fetch('/api/fetch', { method: 'POST' }).then(r => r.json()).then(data => {
+                document.getElementById('fetch-status').innerHTML = `<div style="background: #0f1419; padding: 15px; border-radius: 10px; border: 1px solid #27ae60;"><p style="color: #27ae60;">✅ تم جلب ${data.count} خبر</p></div>`;
+                const html = data.news.map(n => `
+                    <div class="news-item">
+                        <p style="color: #e74c3c; font-size: 0.9em; margin-bottom: 5px;">📡 ${n.source_name || n.source}</p>
+                        <p>${n.text}</p>
+                        <div style="margin-top: 10px;">
+                            <button class="btn" style="padding: 5px 15px;" onclick="useNews('${encodeURIComponent(n.text)}')">استخدام</button>
+                            <button class="btn btn-success" style="padding: 5px 15px;" onclick="rewriteAndSendDirect('${encodeURIComponent(n.text)}')">صياغة ونشر</button>
+                        </div>
+                    </div>
+                `).join('');
+                document.getElementById('fetched-news').innerHTML = html;
+            });
+        }
+        
+        function useNews(text) {
+            document.getElementById('rewrite-text').value = decodeURIComponent(text);
+            showSection('rewrite');
+            document.querySelectorAll('.nav-btn')[3].classList.add('active');
+        }
+        
+        function rewriteAndSendDirect(encodedText) {
+            const text = decodeURIComponent(encodedText);
+            fetch('/api/rewrite/send', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) })
+            .then(r => r.json()).then(data => { alert(data.success ? '✅ تم الصياغة والنشر بنجاح!' : '❌ فشل: ' + data.message); });
+        }
     </script>
 </body>
 </html>
@@ -398,6 +517,58 @@ def api_send():
 @app.route('/api/status')
 def api_status():
     return jsonify({"openai": bool(OPENAI_API_KEY)})
+
+@app.route('/api/sources', methods=['GET', 'POST'])
+def api_sources():
+    data = load_data()
+    if request.method == 'POST':
+        req = request.json
+        new_source = {
+            'id': max([s['id'] for s in data['sources']] + [0]) + 1,
+            'name': req['name'],
+            'username': req['username'].replace('@', ''),
+            'active': True
+        }
+        data['sources'].append(new_source)
+        save_data(data)
+        return jsonify({'success': True})
+    return jsonify(data['sources'])
+
+@app.route('/api/sources/<int:source_id>', methods=['DELETE'])
+def delete_source(source_id):
+    data = load_data()
+    data['sources'] = [s for s in data['sources'] if s['id'] != source_id]
+    save_data(data)
+    return jsonify({'success': True})
+
+@app.route('/api/sources/<int:source_id>/toggle', methods=['POST'])
+def toggle_source(source_id):
+    data = load_data()
+    for source in data['sources']:
+        if source['id'] == source_id:
+            source['active'] = not source.get('active', True)
+            break
+    save_data(data)
+    return jsonify({'success': True})
+
+@app.route('/api/fetch', methods=['POST'])
+def api_fetch():
+    data = load_data()
+    all_news = []
+    for source in data['sources']:
+        if source.get('active', True):
+            messages = fetch_channel_messages(source['username'])
+            for msg in messages:
+                msg['source_name'] = source['name']
+                all_news.append(msg)
+    data['fetched_news'] = all_news[:20]
+    save_data(data)
+    return jsonify({'success': True, 'count': len(all_news), 'news': all_news})
+
+@app.route('/api/fetched')
+def api_fetched():
+    data = load_data()
+    return jsonify(data.get('fetched_news', []))
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
