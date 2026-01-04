@@ -43,6 +43,60 @@ def save_data(data):
     except:
         pass
 
+# ============ فلتر الإعلانات ============
+AD_KEYWORDS = [
+    "إعلان", "ممول", "رابط", "اشترك", "الرابط", "للتواصل", "للإعلان",
+    "سعر", "خصم", "عرض", "مجاني", "اضغط هنا", "انضم", "قناتنا",
+    "بوت", "bot", "@", "t.me/", "للحجز", "للشراء", "تواصل معنا",
+    "رابط القناة", "رابط البوت", "البوت", "للتواصل"
+]
+
+def is_advertisement(text):
+    text_lower = text.lower()
+    ad_count = sum(1 for kw in AD_KEYWORDS if kw in text_lower)
+    return ad_count >= 2
+
+# ============ الهاشتاقات الذكية ============
+HASHTAGS = {
+    "عاجل": ["عاجل", "طارئ", "الآن", "للتو"],
+    "انفجار": ["انفجار", "تفجير", "قنبلة", "عبوة"],
+    "تصريحات": ["تصريح", "أعلن", "صرح", "أكد", "قال", "أشار"],
+    "عسكري": ["جيش", "عسكري", "قوات", "مسلح", "صاروخ", "طائرة", "دبابة"],
+    "سياسي": ["رئيس", "وزير", "برلمان", "حكومة", "انتخاب"],
+    "أمني": ["أمن", "شرطة", "اعتقال", "مداهمة", "اشتباك"],
+    "اقتصادي": ["دولار", "نفط", "اقتصاد", "سعر الصرف", "بورصة"],
+    "كارثة": ["زلزال", "فيضان", "حريق", "كارثة", "ضحايا"],
+    "حرب": ["حرب", "قصف", "غارة", "هجوم", "معركة"]
+}
+
+def get_hashtags(text):
+    found_tags = []
+    for tag, keywords in HASHTAGS.items():
+        for kw in keywords:
+            if kw in text:
+                found_tags.append(f"#{tag}")
+                break
+    return list(set(found_tags))[:3]
+
+# ============ حماية الحقوق بالحروف المخفية ============
+def encode_watermark(text, watermark="iraqiBoy"):
+    # Zero-Width Characters
+    ZERO_WIDTH_SPACE = '\u200b'  # ​
+    ZERO_WIDTH_NON_JOINER = '\u200c'  # ‌
+    ZERO_WIDTH_JOINER = '\u200d'  # ‍
+    
+    # تحويل العلامة المائية إلى binary ثم إلى حروف مخفية
+    binary = ''.join(format(ord(c), '08b') for c in watermark)
+    hidden = ''
+    for bit in binary:
+        if bit == '0':
+            hidden += ZERO_WIDTH_SPACE
+        else:
+            hidden += ZERO_WIDTH_NON_JOINER
+    
+    # إضافة الحروف المخفية في بداية النص
+    return hidden + text
+
 def fetch_channel_messages(username):
     try:
         url = f"https://t.me/s/{username}"
@@ -52,11 +106,12 @@ def fetch_channel_messages(username):
             messages = []
             pattern = r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>'
             matches = re.findall(pattern, response.text, re.DOTALL)
-            for match in matches[:5]:
+            for match in matches[:10]:
                 clean_text = re.sub(r'<[^>]+>', '', match).strip()
-                if clean_text and len(clean_text) > 20:
+                # فلتر الإعلانات
+                if clean_text and len(clean_text) > 20 and not is_advertisement(clean_text):
                     messages.append({'text': clean_text, 'source': username})
-            return messages
+            return messages[:5]
     except:
         pass
     return []
@@ -103,9 +158,13 @@ def get_flags(text):
     return "/".join(found_flags[:3]) if found_flags else "🌍"
 
 def rewrite_with_ai(original_text):
+    flags = get_flags(original_text)
+    hashtags = get_hashtags(original_text)
+    hashtags_str = " ".join(hashtags) if hashtags else ""
+    
     if not OPENAI_API_KEY:
-        flags = get_flags(original_text)
-        return f"عاجل\n\n{original_text}\n\n{flags}\n\nⓘ متابعة التطورات | ما وراء"
+        result = f"عاجل\n\n{original_text}\n\n{flags}\n\n{hashtags_str}\n\nⓘ متابعة التطورات | ما وراء"
+        return encode_watermark(result)
     
     try:
         headers = {
@@ -118,19 +177,16 @@ def rewrite_with_ai(original_text):
 2. مهني وموضوعي - فقط الحقائق
 3. بدون لغة عاطفية أو تحريضية
 4. اجعل العنوان يبدأ بـ "عاجل" إذا كان خبراً عاجلاً
-5. أضف أعلام الدول المتعلقة بالخبر
 
 الخبر الأصلي:
 {original_text}
 
-أعد صياغته بالتنسيق التالي:
+أعد صياغته بالتنسيق التالي (بدون إضافة أي شيء آخر):
 عاجل
 
-[العنوان المعاد صياغته] [الأعلام]
+[العنوان المعاد صياغته]
 
-[تفاصيل الخبر بشكل محايد]
-
-ⓘ متابعة التطورات | ما وراء"""
+[تفاصيل الخبر بشكل محايد]"""
 
         data = {
             "model": "gpt-4o-mini",
@@ -151,14 +207,17 @@ def rewrite_with_ai(original_text):
         
         if response.status_code == 200:
             result = response.json()
-            return result["choices"][0]["message"]["content"]
+            ai_text = result["choices"][0]["message"]["content"]
+            # إضافة الأعلام والهاشتاقات والتوقيع
+            final_text = f"{ai_text}\n\n{flags}\n\n{hashtags_str}\n\nⓘ متابعة التطورات | ما وراء"
+            return encode_watermark(final_text)
         else:
-            flags = get_flags(original_text)
-            return f"عاجل\n\n{original_text}\n\n{flags}\n\nⓘ متابعة التطورات | ما وراء"
+            result = f"عاجل\n\n{original_text}\n\n{flags}\n\n{hashtags_str}\n\nⓘ متابعة التطورات | ما وراء"
+            return encode_watermark(result)
             
     except Exception as e:
-        flags = get_flags(original_text)
-        return f"عاجل\n\n{original_text}\n\n{flags}\n\nⓘ متابعة التطورات | ما وراء"
+        result = f"عاجل\n\n{original_text}\n\n{flags}\n\n{hashtags_str}\n\nⓘ متابعة التطورات | ما وراء"
+        return encode_watermark(result)
 
 def send_to_telegram(text):
     try:
@@ -237,9 +296,21 @@ HTML = '''
                 <div class="stat-card"><h3>المصادر النشطة</h3><div class="value">4</div></div>
                 <div class="stat-card"><h3>حالة النظام</h3><div class="value" style="color: #27ae60;">✓</div></div>
             </div>
+            
+            <div style="background: #0f1419; padding: 20px; border-radius: 10px; margin: 20px 0; border: 1px solid #e74c3c;">
+                <h3 style="color: #e74c3c; margin-bottom: 15px;">🚀 النشر التلقائي</h3>
+                <p style="color: #8899a6; margin-bottom: 15px;">جلب الأخبار من المصادر وصياغتها ونشرها تلقائياً</p>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button class="btn btn-success" onclick="publishOne()">📰 نشر خبر واحد</button>
+                    <button class="btn" onclick="autoPublish()" style="background: #9b59b6;">🔄 نشر تلقائي (كل المصادر)</button>
+                </div>
+                <div id="auto-publish-status" style="margin-top: 15px;"></div>
+            </div>
+            
             <div style="text-align: center; padding: 20px; background: #0f1419; border-radius: 10px; border: 1px solid #27ae60;">
                 <h3 style="color: #27ae60; margin-bottom: 10px;">✅ نظام ما وراء يعمل بنجاح!</h3>
                 <p style="color: #8899a6;">لوحة التحكم جاهزة للاستخدام.</p>
+                <p style="color: #f39c12; font-size: 0.9em; margin-top: 10px;">🔒 حماية الحقوق: كل خبر يحتوي على توقيع مخفي (iraqiBoy)</p>
             </div>
         </div>
         
@@ -458,6 +529,38 @@ HTML = '''
             fetch('/api/rewrite/send', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) })
             .then(r => r.json()).then(data => { alert(data.success ? '✅ تم الصياغة والنشر بنجاح!' : '❌ فشل: ' + data.message); });
         }
+        
+        function publishOne() {
+            document.getElementById('auto-publish-status').innerHTML = '<div class="loading show"><div class="spinner"></div><p>جاري جلب وصياغة ونشر خبر...</p></div>';
+            fetch('/api/publish_one', { method: 'POST' }).then(r => r.json()).then(data => {
+                if (data.success) {
+                    document.getElementById('auto-publish-status').innerHTML = `
+                        <div style="background: #0f1419; padding: 15px; border-radius: 10px; border: 1px solid #27ae60;">
+                            <p style="color: #27ae60; margin-bottom: 10px;">✅ تم النشر بنجاح!</p>
+                            <p style="color: #e74c3c; font-size: 0.9em;">المصدر: ${data.source}</p>
+                            <p style="color: #8899a6; font-size: 0.9em; margin-top: 10px;">${data.original}</p>
+                        </div>
+                    `;
+                    loadNews();
+                } else {
+                    document.getElementById('auto-publish-status').innerHTML = '<div style="background: #0f1419; padding: 15px; border-radius: 10px; border: 1px solid #e74c3c;"><p style="color: #e74c3c;">❌ ' + data.message + '</p></div>';
+                }
+            });
+        }
+        
+        function autoPublish() {
+            if (!confirm('هل تريد نشر أخبار من كل المصادر تلقائياً؟')) return;
+            document.getElementById('auto-publish-status').innerHTML = '<div class="loading show"><div class="spinner"></div><p>جاري النشر التلقائي...</p></div>';
+            fetch('/api/auto_publish', { method: 'POST' }).then(r => r.json()).then(data => {
+                document.getElementById('auto-publish-status').innerHTML = `
+                    <div style="background: #0f1419; padding: 15px; border-radius: 10px; border: 1px solid #27ae60;">
+                        <p style="color: #27ae60; margin-bottom: 10px;">✅ تم نشر ${data.published_count} خبر بنجاح!</p>
+                        ${data.published.map(p => '<p style="color: #8899a6; font-size: 0.9em;">• ' + p.source + ': ' + p.text.substring(0, 50) + '...</p>').join('')}
+                    </div>
+                `;
+                loadNews();
+            });
+        }
     </script>
 </body>
 </html>
@@ -569,6 +672,58 @@ def api_fetch():
 def api_fetched():
     data = load_data()
     return jsonify(data.get('fetched_news', []))
+
+@app.route('/api/auto_publish', methods=['POST'])
+def api_auto_publish():
+    """جلب الأخبار وصياغتها ونشرها تلقائياً"""
+    data = load_data()
+    published = []
+    errors = []
+    
+    for source in data['sources']:
+        if source.get('active', True):
+            messages = fetch_channel_messages(source['username'])
+            for msg in messages[:2]:  # أول خبرين من كل مصدر
+                try:
+                    # إعادة الصياغة
+                    rewritten = rewrite_with_ai(msg['text'])
+                    # النشر
+                    success = send_to_telegram(rewritten)
+                    if success:
+                        published.append({'source': source['name'], 'text': msg['text'][:100]})
+                        NEWS.append(rewritten)
+                except Exception as e:
+                    errors.append({'source': source['name'], 'error': str(e)})
+    
+    return jsonify({
+        'success': True,
+        'published_count': len(published),
+        'published': published,
+        'errors': errors
+    })
+
+@app.route('/api/publish_one', methods=['POST'])
+def api_publish_one():
+    """جلب خبر واحد عشوائي وصياغته ونشره"""
+    data = load_data()
+    
+    for source in data['sources']:
+        if source.get('active', True):
+            messages = fetch_channel_messages(source['username'])
+            if messages:
+                msg = messages[0]
+                rewritten = rewrite_with_ai(msg['text'])
+                success = send_to_telegram(rewritten)
+                if success:
+                    NEWS.append(rewritten)
+                    return jsonify({
+                        'success': True,
+                        'source': source['name'],
+                        'original': msg['text'][:200],
+                        'rewritten': rewritten
+                    })
+    
+    return jsonify({'success': False, 'message': 'لا توجد أخبار جديدة'})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
