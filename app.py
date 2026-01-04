@@ -1,234 +1,204 @@
 from flask import Flask, render_template_string, request, jsonify
-import json
 import os
+import json
 import requests
-from datetime import datetime
+from openai import OpenAI
 
 app = Flask(__name__)
 
-# ============ الإعدادات ============
-TELEGRAM_BOT_TOKEN = "8240379609:AAFKeQ8hLv605TSD7AdG29vGTpZ4fPex62E"
+# Configuration
+BOT_TOKEN = "8240379609:AAFKeQ8hLv605TSD7AdG29vGTpZ4fPex62E"
 CHANNEL_ID = "-1002560480003"
 ADMIN_ID = "5365833232"
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-OPENAI_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 
-# ============ البيانات ============
-import re
+# Initialize OpenAI
+client = None
+if OPENAI_API_KEY:
+    client = OpenAI(api_key=OPENAI_API_KEY)
 
-DATA_FILE = '/tmp/ma_waraa_data.json'
-
-def load_data():
-    try:
-        if os.path.exists(DATA_FILE):
-            with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-    except:
-        pass
-    return {
-        "sources": [
-            {"id": 1, "name": "المستشار", "username": "Almustashaar", "active": True},
-            {"id": 2, "name": "صوت الحرب", "username": "sawtl7arb", "active": True},
-            {"id": 3, "name": "تسريبات الحروب", "username": "WarsLeaks", "active": True},
-            {"id": 4, "name": "نايا للعراق", "username": "nayaforiraq", "active": True}
-        ],
-        "news": [],
-        "fetched_news": []
-    }
-
-def save_data(data):
-    try:
-        with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except:
-        pass
-
-# ============ فلتر الإعلانات ============
-AD_KEYWORDS = [
-    "إعلان", "ممول", "رابط", "اشترك", "الرابط", "للتواصل", "للإعلان",
-    "سعر", "خصم", "عرض", "مجاني", "اضغط هنا", "انضم", "قناتنا",
-    "بوت", "bot", "@", "t.me/", "للحجز", "للشراء", "تواصل معنا",
-    "رابط القناة", "رابط البوت", "البوت", "للتواصل"
+# Data storage
+NEWS = []
+SOURCES = [
+    {"id": 1, "name": "المستشار", "username": "Almustashaar", "active": True},
+    {"id": 2, "name": "صوت الحرب", "username": "sawtl7arb", "active": True},
+    {"id": 3, "name": "تسريبات الحرب", "username": "WarsLeaks", "active": True},
+    {"id": 4, "name": "نايا للعراق", "username": "nayaforiraq", "active": True}
 ]
 
-def is_advertisement(text):
+# Country flags mapping
+COUNTRY_FLAGS = {
+    'العراق': '🇮🇶', 'عراق': '🇮🇶', 'بغداد': '🇮🇶',
+    'إيران': '🇮🇷', 'ايران': '🇮🇷', 'طهران': '🇮🇷',
+    'إسرائيل': '🇮🇱', 'اسرائيل': '🇮🇱', 'تل أبيب': '🇮🇱', 'الإسرائيلي': '🇮🇱',
+    'أمريكا': '🇺🇸', 'امريكا': '🇺🇸', 'الأمريكي': '🇺🇸', 'واشنطن': '🇺🇸',
+    'سوريا': '🇸🇾', 'دمشق': '🇸🇾', 'السوري': '🇸🇾',
+    'لبنان': '🇱🇧', 'بيروت': '🇱🇧', 'حزب الله': '🇱🇧',
+    'السعودية': '🇸🇦', 'الرياض': '🇸🇦',
+    'الإمارات': '🇦🇪', 'أبوظبي': '🇦🇪', 'دبي': '🇦🇪',
+    'تركيا': '🇹🇷', 'أنقرة': '🇹🇷',
+    'روسيا': '🇷🇺', 'موسكو': '🇷🇺',
+    'الصين': '🇨🇳', 'بكين': '🇨🇳',
+    'بريطانيا': '🇬🇧', 'لندن': '🇬🇧',
+    'فرنسا': '🇫🇷', 'باريس': '🇫🇷',
+    'اليمن': '🇾🇪', 'صنعاء': '🇾🇪', 'الحوثي': '🇾🇪',
+    'فلسطين': '🇵🇸', 'غزة': '🇵🇸', 'حماس': '🇵🇸',
+    'مصر': '🇪🇬', 'القاهرة': '🇪🇬',
+    'الأردن': '🇯🇴', 'عمان': '🇯🇴',
+    'الكويت': '🇰🇼',
+    'قطر': '🇶🇦', 'الدوحة': '🇶🇦',
+    'البحرين': '🇧🇭',
+    'عمان': '🇴🇲',
+    'باكستان': '🇵🇰',
+    'أفغانستان': '🇦🇫',
+    'الهند': '🇮🇳',
+    'كوريا': '🇰🇷',
+    'اليابان': '🇯🇵',
+    'ألمانيا': '🇩🇪',
+    'أوكرانيا': '🇺🇦',
+}
+
+# News type emojis
+NEWS_EMOJIS = {
+    'انفجار': '💥',
+    'تفجير': '💥',
+    'قصف': '💥',
+    'غارة': '✈️',
+    'غارات': '✈️',
+    'طائرة': '✈️',
+    'صاروخ': '🚀',
+    'صواريخ': '🚀',
+    'تصريح': '📢',
+    'تصريحات': '📢',
+    'قال': '📢',
+    'أعلن': '📢',
+    'اجتماع': '🤝',
+    'مباحثات': '🤝',
+    'عسكري': '🎖️',
+    'جيش': '🎖️',
+    'قوات': '🎖️',
+    'مناورة': '🎖️',
+    'اعتقال': '⚠️',
+    'احتجاج': '📣',
+    'احتجاجات': '📣',
+    'مظاهرات': '📣',
+    'حرب': '⚔️',
+    'هجوم': '⚔️',
+    'اشتباك': '⚔️',
+    'سياسي': '🏛️',
+    'رئيس': '🏛️',
+    'وزير': '🏛️',
+    'حكومة': '🏛️',
+    'اقتصاد': '💰',
+    'نفط': '🛢️',
+    'طاقة': '⚡',
+}
+
+# Ad filter keywords
+AD_KEYWORDS = ['إعلان', 'رابط', 'خصم', 'عرض', 'تخفيض', 'للتواصل', 'للحجز', 'اشترك', 'تابعنا', 'رابط القناة', 'انضم', 'اشتراك', 'مجاني', 'فرصة', 'حصري']
+
+def is_ad(text):
+    """Check if text is an advertisement"""
     text_lower = text.lower()
-    ad_count = sum(1 for kw in AD_KEYWORDS if kw in text_lower)
-    return ad_count >= 2
-
-# ============ الهاشتاقات الذكية ============
-HASHTAGS = {
-    "عاجل": ["عاجل", "طارئ", "الآن", "للتو"],
-    "انفجار": ["انفجار", "تفجير", "قنبلة", "عبوة"],
-    "تصريحات": ["تصريح", "أعلن", "صرح", "أكد", "قال", "أشار"],
-    "عسكري": ["جيش", "عسكري", "قوات", "مسلح", "صاروخ", "طائرة", "دبابة"],
-    "سياسي": ["رئيس", "وزير", "برلمان", "حكومة", "انتخاب"],
-    "أمني": ["أمن", "شرطة", "اعتقال", "مداهمة", "اشتباك"],
-    "اقتصادي": ["دولار", "نفط", "اقتصاد", "سعر الصرف", "بورصة"],
-    "كارثة": ["زلزال", "فيضان", "حريق", "كارثة", "ضحايا"],
-    "حرب": ["حرب", "قصف", "غارة", "هجوم", "معركة"]
-}
-
-def get_hashtags(text):
-    found_tags = []
-    for tag, keywords in HASHTAGS.items():
-        for kw in keywords:
-            if kw in text:
-                found_tags.append(f"#{tag}")
-                break
-    return list(set(found_tags))[:3]
-
-# ============ حماية الحقوق بالحروف المخفية ============
-def encode_watermark(text, watermark="iraqiBoy"):
-    # Zero-Width Characters
-    ZERO_WIDTH_SPACE = '\u200b'  # ​
-    ZERO_WIDTH_NON_JOINER = '\u200c'  # ‌
-    ZERO_WIDTH_JOINER = '\u200d'  # ‍
-    
-    # تحويل العلامة المائية إلى binary ثم إلى حروف مخفية
-    binary = ''.join(format(ord(c), '08b') for c in watermark)
-    hidden = ''
-    for bit in binary:
-        if bit == '0':
-            hidden += ZERO_WIDTH_SPACE
-        else:
-            hidden += ZERO_WIDTH_NON_JOINER
-    
-    # إضافة الحروف المخفية في بداية النص
-    return hidden + text
-
-def fetch_channel_messages(username):
-    try:
-        url = f"https://t.me/s/{username}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            messages = []
-            pattern = r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>'
-            matches = re.findall(pattern, response.text, re.DOTALL)
-            for match in matches[:10]:
-                clean_text = re.sub(r'<[^>]+>', '', match).strip()
-                # فلتر الإعلانات
-                if clean_text and len(clean_text) > 20 and not is_advertisement(clean_text):
-                    messages.append({'text': clean_text, 'source': username})
-            return messages[:5]
-    except:
-        pass
-    return []
-
-SOURCES = load_data().get('sources', [])
-NEWS = load_data().get('news', [])
-
-# ============ قاموس الأعلام ============
-FLAGS = {
-    "العراق": "🇮🇶", "عراق": "🇮🇶", "بغداد": "🇮🇶", "البصرة": "🇮🇶", "أربيل": "🇮🇶", "الموصل": "🇮🇶",
-    "سوريا": "🇸🇾", "سوري": "🇸🇾", "دمشق": "🇸🇾", "حلب": "🇸🇾",
-    "إيران": "🇮🇷", "ايران": "🇮🇷", "طهران": "🇮🇷", "إيراني": "🇮🇷",
-    "أمريكا": "🇺🇸", "امريكا": "🇺🇸", "أمريكي": "🇺🇸", "واشنطن": "🇺🇸", "الولايات المتحدة": "🇺🇸",
-    "إسرائيل": "🇮🇱", "اسرائيل": "🇮🇱", "إسرائيلي": "🇮🇱", "تل أبيب": "🇮🇱", "الاحتلال": "🇮🇱",
-    "فلسطين": "🇵🇸", "فلسطيني": "🇵🇸", "غزة": "🇵🇸", "الضفة": "🇵🇸",
-    "لبنان": "🇱🇧", "لبناني": "🇱🇧", "بيروت": "🇱🇧", "حزب الله": "🇱🇧",
-    "السعودية": "🇸🇦", "سعودي": "🇸🇦", "الرياض": "🇸🇦",
-    "الإمارات": "🇦🇪", "إماراتي": "🇦🇪", "أبوظبي": "🇦🇪", "دبي": "🇦🇪",
-    "تركيا": "🇹🇷", "تركي": "🇹🇷", "أنقرة": "🇹🇷", "إسطنبول": "🇹🇷",
-    "روسيا": "🇷🇺", "روسي": "🇷🇺", "موسكو": "🇷🇺",
-    "الصين": "🇨🇳", "صيني": "🇨🇳", "بكين": "🇨🇳",
-    "مصر": "🇪🇬", "مصري": "🇪🇬", "القاهرة": "🇪🇬",
-    "الأردن": "🇯🇴", "أردني": "🇯🇴", "عمان": "🇯🇴",
-    "الكويت": "🇰🇼", "كويتي": "🇰🇼",
-    "قطر": "🇶🇦", "قطري": "🇶🇦", "الدوحة": "🇶🇦",
-    "البحرين": "🇧🇭", "بحريني": "🇧🇭",
-    "اليمن": "🇾🇪", "يمني": "🇾🇪", "صنعاء": "🇾🇪", "الحوثي": "🇾🇪",
-    "ليبيا": "🇱🇾", "ليبي": "🇱🇾", "طرابلس": "🇱🇾",
-    "السودان": "🇸🇩", "سوداني": "🇸🇩", "الخرطوم": "🇸🇩",
-    "الجزائر": "🇩🇿", "جزائري": "🇩🇿",
-    "المغرب": "🇲🇦", "مغربي": "🇲🇦",
-    "تونس": "🇹🇳", "تونسي": "🇹🇳",
-    "أوكرانيا": "🇺🇦", "أوكراني": "🇺🇦", "كييف": "🇺🇦",
-    "بريطانيا": "🇬🇧", "بريطاني": "🇬🇧", "لندن": "🇬🇧",
-    "فرنسا": "🇫🇷", "فرنسي": "🇫🇷", "باريس": "🇫🇷",
-    "ألمانيا": "🇩🇪", "ألماني": "🇩🇪", "برلين": "🇩🇪",
-}
+    return any(keyword in text for keyword in AD_KEYWORDS)
 
 def get_flags(text):
-    found_flags = []
-    for keyword, flag in FLAGS.items():
-        if keyword in text and flag not in found_flags:
-            found_flags.append(flag)
-    return "/".join(found_flags[:3]) if found_flags else "🌍"
+    """Extract country flags from text"""
+    flags = []
+    for country, flag in COUNTRY_FLAGS.items():
+        if country in text and flag not in flags:
+            flags.append(flag)
+    return flags[:3]  # Max 3 flags
 
-def rewrite_with_ai(original_text):
-    flags = get_flags(original_text)
-    hashtags = get_hashtags(original_text)
-    hashtags_str = " ".join(hashtags) if hashtags else ""
-    
-    if not OPENAI_API_KEY:
-        result = f"عاجل\n\n{original_text}\n\n{flags}\n\n{hashtags_str}\n\nⓘ متابعة التطورات | ما وراء"
-        return encode_watermark(result)
+def get_emoji(text):
+    """Get appropriate emoji for news type"""
+    for keyword, emoji in NEWS_EMOJIS.items():
+        if keyword in text:
+            return emoji
+    return '📰'  # Default news emoji
+
+def add_hidden_signature(text):
+    """Add hidden signature using zero-width characters"""
+    signature = "iraqiBoy"
+    zwc = {
+        'i': '\u200b',  # Zero-width space
+        'r': '\u200c',  # Zero-width non-joiner
+        'a': '\u200d',  # Zero-width joiner
+        'q': '\ufeff',  # Zero-width no-break space
+        'B': '\u200b\u200c',
+        'o': '\u200c\u200d',
+        'y': '\u200d\u200b'
+    }
+    hidden = ''.join(zwc.get(c, '') for c in signature)
+    return text + hidden
+
+def rewrite_with_ai(text):
+    """Rewrite news using OpenAI with new format"""
+    if not client:
+        # Fallback without AI
+        flags = get_flags(text)
+        emoji = get_emoji(text)
+        flags_str = '/'.join(flags) if flags else '🌍'
+        return add_hidden_signature(f"{flags_str} {emoji} {text[:200]}")
     
     try:
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
-        }
+        flags = get_flags(text)
+        emoji = get_emoji(text)
+        flags_str = '/'.join(flags) if flags else '🌍'
         
-        prompt = f"""أنت محرر أخبار محترف ومحايد تماماً. أعد صياغة الخبر التالي بشكل:
-1. محايد تماماً - بدون أي انحياز سياسي أو فكري
-2. مهني وموضوعي - فقط الحقائق
-3. بدون لغة عاطفية أو تحريضية
-4. اجعل العنوان يبدأ بـ "عاجل" إذا كان خبراً عاجلاً
-
-الخبر الأصلي:
-{original_text}
-
-أعد صياغته بالتنسيق التالي (بدون إضافة أي شيء آخر):
-عاجل
-
-[العنوان المعاد صياغته]
-
-[تفاصيل الخبر بشكل محايد]"""
-
-        data = {
-            "model": "gpt-4o-mini",
-            "messages": [
-                {"role": "system", "content": "أنت محرر أخبار محترف ومحايد. تعيد صياغة الأخبار بشكل موضوعي ومهني."},
-                {"role": "user", "content": prompt}
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """أنت محرر أخبار محترف. مهمتك إعادة صياغة الخبر بشكل:
+1. محايد تماماً - بدون أي انحياز سياسي
+2. مختصر جداً - جملة أو جملتين فقط
+3. واضح ومباشر
+4. بدون مقدمات أو خاتمات
+5. بدون كلمة "عاجل" في البداية
+6. بدون أي توقيع أو اسم قناة
+7. فقط الخبر الصافي"""
+                },
+                {
+                    "role": "user",
+                    "content": f"أعد صياغة هذا الخبر بشكل مختصر ومحايد (جملة أو جملتين فقط):\n\n{text}"
+                }
             ],
-            "max_tokens": 1000,
-            "temperature": 0.7
-        }
-        
-        response = requests.post(
-            f"{OPENAI_API_BASE}/chat/completions",
-            headers=headers,
-            json=data,
-            timeout=30
+            max_tokens=150,
+            temperature=0.3
         )
         
-        if response.status_code == 200:
-            result = response.json()
-            ai_text = result["choices"][0]["message"]["content"]
-            # إضافة الأعلام والهاشتاقات والتوقيع
-            final_text = f"{ai_text}\n\n{flags}\n\n{hashtags_str}\n\nⓘ متابعة التطورات | ما وراء"
-            return encode_watermark(final_text)
-        else:
-            result = f"عاجل\n\n{original_text}\n\n{flags}\n\n{hashtags_str}\n\nⓘ متابعة التطورات | ما وراء"
-            return encode_watermark(result)
-            
+        rewritten = response.choices[0].message.content.strip()
+        # Remove any "عاجل" if AI added it
+        rewritten = rewritten.replace('عاجل:', '').replace('عاجل -', '').replace('عاجل', '').strip()
+        
+        # Format: FLAGS EMOJI NEWS
+        final = f"{flags_str} {emoji} {rewritten}"
+        return add_hidden_signature(final)
+        
     except Exception as e:
-        result = f"عاجل\n\n{original_text}\n\n{flags}\n\n{hashtags_str}\n\nⓘ متابعة التطورات | ما وراء"
-        return encode_watermark(result)
+        flags = get_flags(text)
+        emoji = get_emoji(text)
+        flags_str = '/'.join(flags) if flags else '🌍'
+        return add_hidden_signature(f"{flags_str} {emoji} {text[:200]}")
 
 def send_to_telegram(text):
+    """Send message to Telegram channel"""
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        data = {"chat_id": CHANNEL_ID, "text": text, "parse_mode": "HTML"}
-        response = requests.post(url, data=data, timeout=10)
-        return response.status_code == 200
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {
+            "chat_id": CHANNEL_ID,
+            "text": text,
+            "parse_mode": "HTML"
+        }
+        response = requests.post(url, data=data)
+        return response.json().get('ok', False)
     except:
         return False
 
-HTML = '''
+# HTML Template
+HTML = """
 <!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
@@ -298,11 +268,10 @@ HTML = '''
             </div>
             
             <div style="background: #0f1419; padding: 20px; border-radius: 10px; margin: 20px 0; border: 1px solid #e74c3c;">
-                <h3 style="color: #e74c3c; margin-bottom: 15px;">🚀 النشر التلقائي</h3>
-                <p style="color: #8899a6; margin-bottom: 15px;">جلب الأخبار من المصادر وصياغتها ونشرها تلقائياً</p>
+                <h3 style="color: #e74c3c; margin-bottom: 15px;">🚀 النشر السريع</h3>
+                <p style="color: #8899a6; margin-bottom: 15px;">صياغة ونشر الأخبار بضغطة واحدة</p>
                 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                     <button class="btn btn-success" onclick="publishOne()">📰 نشر خبر واحد</button>
-                    <button class="btn" onclick="autoPublish()" style="background: #9b59b6;">🔄 نشر تلقائي (كل المصادر)</button>
                 </div>
                 <div id="auto-publish-status" style="margin-top: 15px;"></div>
             </div>
@@ -324,35 +293,29 @@ HTML = '''
             </div>
             <h3 style="margin-bottom: 15px; color: #e74c3c;">📡 المصادر الحالية:</h3>
             <div id="sources-list"></div>
-            <div style="margin-top: 20px;">
-                <button class="btn" onclick="fetchNews()">🔄 جلب الأخبار من المصادر</button>
-            </div>
-            <div id="fetch-status" style="margin-top: 15px;"></div>
-            <div id="fetched-news" style="margin-top: 20px;"></div>
         </div>
         
         <div id="news" class="section">
             <h2>📰 إضافة خبر جديد</h2>
             <textarea id="news-text" rows="5" placeholder="أدخل الخبر هنا..."></textarea>
             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                <button class="btn" onclick="addNews()">📤 إضافة الخبر</button>
-                <button class="btn btn-success" onclick="addAndSend()">🚀 إضافة وإرسال للقناة</button>
+                <button class="btn btn-success" onclick="addAndSend()">🚀 صياغة وإرسال للقناة</button>
             </div>
             <div class="loading" id="news-loading"><div class="spinner"></div><p>جاري المعالجة...</p></div>
             <div id="news-result" style="margin-top: 20px;"></div>
-            <h3 style="margin-top: 30px; margin-bottom: 15px; color: #e74c3c;">📋 الأخبار المضافة</h3>
+            <h3 style="margin-top: 30px; margin-bottom: 15px; color: #e74c3c;">📋 الأخبار المنشورة</h3>
             <div id="news-list"></div>
         </div>
         
         <div id="rewrite" class="section">
             <h2>✏️ إعادة صياغة الخبر</h2>
-            <p style="color: #8899a6; margin-bottom: 20px;">أدخل الخبر وسيتم إعادة صياغته بشكل محايد وتام باستخدام الذكاء الاصطناعي:</p>
+            <p style="color: #8899a6; margin-bottom: 20px;">أدخل الخبر وسيتم إعادة صياغته بشكل محايد ومختصر:</p>
             <textarea id="rewrite-text" rows="6" placeholder="أدخل الخبر الأصلي هنا..."></textarea>
             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                 <button class="btn" onclick="rewriteNews()">✨ إعادة الصياغة</button>
-                <button class="btn btn-success" onclick="rewriteAndSend()">🚀 إعادة الصياغة وإرسال للقناة</button>
+                <button class="btn btn-success" onclick="rewriteAndSend()">🚀 صياغة وإرسال للقناة</button>
             </div>
-            <div class="loading" id="rewrite-loading"><div class="spinner"></div><p>جاري إعادة الصياغة بالذكاء الاصطناعي...</p></div>
+            <div class="loading" id="rewrite-loading"><div class="spinner"></div><p>جاري إعادة الصياغة...</p></div>
             <div id="rewrite-result"></div>
         </div>
         
@@ -361,7 +324,6 @@ HTML = '''
             <div class="source-item"><div class="source-info"><h4>معرف القناة</h4><span>-1002560480003</span></div></div>
             <div class="source-item"><div class="source-info"><h4>معرف المسؤول</h4><span>5365833232</span></div></div>
             <div class="source-item"><div class="source-info"><h4>حالة OpenAI</h4><span id="openai-status">جاري التحقق...</span></div></div>
-            <div class="source-item"><div class="source-info"><h4>عدد المصادر</h4><span>4 مصادر</span></div></div>
         </div>
         
         <div class="footer"><p>© 2026 نظام ما وراء | جميع الحقوق محفوظة</p></div>
@@ -375,20 +337,6 @@ HTML = '''
             event.target.classList.add('active');
         }
         
-        function addNews() {
-            const text = document.getElementById('news-text').value;
-            if (!text) { alert('أدخل الخبر أولاً'); return; }
-            document.getElementById('news-loading').classList.add('show');
-            fetch('/api/news', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: text}) })
-            .then(r => r.json())
-            .then(data => {
-                document.getElementById('news-loading').classList.remove('show');
-                document.getElementById('news-result').innerHTML = '<div class="result-box" style="border-color: #27ae60;">✅ ' + data.message + '</div>';
-                document.getElementById('news-text').value = '';
-                loadNews();
-            });
-        }
-        
         function addAndSend() {
             const text = document.getElementById('news-text').value;
             if (!text) { alert('أدخل الخبر أولاً'); return; }
@@ -398,7 +346,7 @@ HTML = '''
             .then(data => {
                 document.getElementById('news-loading').classList.remove('show');
                 if (data.success) {
-                    document.getElementById('news-result').innerHTML = '<div class="result-box" style="border-color: #27ae60;">✅ ' + data.message + '<br><br>' + data.result + '</div>';
+                    document.getElementById('news-result').innerHTML = '<div class="result-box" style="border-color: #27ae60;">✅ ' + data.message + '<br><br><strong>الخبر المنشور:</strong><br>' + data.result + '</div>';
                     document.getElementById('news-text').value = '';
                 } else {
                     document.getElementById('news-result').innerHTML = '<div class="result-box error">❌ ' + data.message + '</div>';
@@ -416,8 +364,7 @@ HTML = '''
             .then(r => r.json())
             .then(data => {
                 document.getElementById('rewrite-loading').classList.remove('show');
-                document.getElementById('rewrite-result').innerHTML = '<h3 style="margin: 20px 0 10px; color: #27ae60;">النتيجة:</h3><div class="result-box">' + data.result + '</div><button class="btn btn-success" style="margin-top: 15px;" onclick="sendRewritten()">🚀 إرسال للقناة</button>';
-                window.lastRewritten = data.result;
+                document.getElementById('rewrite-result').innerHTML = '<div class="result-box"><strong>النتيجة:</strong><br><br>' + data.result + '</div>';
             });
         }
         
@@ -431,7 +378,7 @@ HTML = '''
             .then(data => {
                 document.getElementById('rewrite-loading').classList.remove('show');
                 if (data.success) {
-                    document.getElementById('rewrite-result').innerHTML = '<h3 style="margin: 20px 0 10px; color: #27ae60;">✅ تم الإرسال بنجاح!</h3><div class="result-box">' + data.result + '</div>';
+                    document.getElementById('rewrite-result').innerHTML = '<div class="result-box" style="border-color: #27ae60;">✅ تم الإرسال للقناة!<br><br><strong>الخبر:</strong><br>' + data.result + '</div>';
                     document.getElementById('rewrite-text').value = '';
                 } else {
                     document.getElementById('rewrite-result').innerHTML = '<div class="result-box error">❌ ' + data.message + '</div>';
@@ -439,183 +386,75 @@ HTML = '''
             });
         }
         
-        function sendRewritten() {
-            if (!window.lastRewritten) { alert('لا يوجد خبر للإرسال'); return; }
-            fetch('/api/send', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: window.lastRewritten}) })
+        function publishOne() {
+            const status = document.getElementById('auto-publish-status');
+            status.innerHTML = '<div class="loading show"><div class="spinner"></div><p>جاري النشر...</p></div>';
+            fetch('/api/publish/one', { method: 'POST' })
             .then(r => r.json())
-            .then(data => { alert(data.success ? '✅ تم الإرسال بنجاح!' : '❌ فشل الإرسال: ' + data.message); });
-        }
-        
-        function loadNews() {
-            fetch('/api/news').then(r => r.json()).then(data => {
-                const html = data.map(n => '<div class="news-item"><div class="content">' + n + '</div></div>').join('');
-                document.getElementById('news-list').innerHTML = html || '<p style="color: #8899a6;">لا توجد أخبار بعد</p>';
-                document.getElementById('news-count').textContent = data.length;
+            .then(data => {
+                if (data.success) {
+                    status.innerHTML = '<div class="result-box" style="border-color: #27ae60;">✅ ' + data.message + '<br><br>' + data.result + '</div>';
+                } else {
+                    status.innerHTML = '<div class="result-box error">❌ ' + data.message + '</div>';
+                }
             });
         }
         
-        fetch('/api/status').then(r => r.json()).then(data => {
-            document.getElementById('openai-status').textContent = data.openai ? '✅ متصل' : '⚠️ غير متصل';
-        });
-        
-        loadNews();
-        loadSources();
-        
         function loadSources() {
-            fetch('/api/sources').then(r => r.json()).then(sources => {
-                const html = sources.map(s => `
-                    <div class="source-item">
-                        <div class="source-info"><h4>${s.name}</h4><span>@${s.username}</span></div>
-                        <div>
-                            <span class="status-badge ${s.active ? 'status-active' : ''}" style="${!s.active ? 'background:#e74c3c;' : ''}">${s.active ? '✓ نشط' : '✗ معطل'}</span>
-                            <button class="btn" style="padding: 5px 10px; margin-right: 5px;" onclick="toggleSource(${s.id})">${s.active ? 'تعطيل' : 'تفعيل'}</button>
-                            <button class="btn" style="padding: 5px 10px; background: #e74c3c;" onclick="deleteSource(${s.id})">حذف</button>
-                        </div>
-                    </div>
-                `).join('');
-                document.getElementById('sources-list').innerHTML = html || '<p style="color: #8899a6;">لا توجد مصادر</p>';
+            fetch('/api/sources')
+            .then(r => r.json())
+            .then(data => {
+                const html = data.map(s => 
+                    '<div class="source-item"><div class="source-info"><h4>' + s.name + '</h4><span>@' + s.username + '</span></div><span class="status-badge status-active">نشط</span></div>'
+                ).join('');
+                document.getElementById('sources-list').innerHTML = html;
             });
         }
         
         function addSource() {
             const name = document.getElementById('new-source-name').value;
-            const username = document.getElementById('new-source-username').value.replace('@', '');
-            if (!name || !username) { alert('الرجاء إدخال اسم المصدر واليوزرنيم'); return; }
-            fetch('/api/sources', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name, username}) })
-            .then(r => r.json()).then(() => {
+            const username = document.getElementById('new-source-username').value;
+            if (!name || !username) { alert('أدخل اسم المصدر واليوزرنيم'); return; }
+            fetch('/api/sources', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: name, username: username}) })
+            .then(r => r.json())
+            .then(data => {
+                alert(data.message);
                 document.getElementById('new-source-name').value = '';
                 document.getElementById('new-source-username').value = '';
                 loadSources();
-                alert('تم إضافة المصدر بنجاح!');
             });
         }
         
-        function toggleSource(id) {
-            fetch(`/api/sources/${id}/toggle`, { method: 'POST' }).then(() => loadSources());
-        }
-        
-        function deleteSource(id) {
-            if (confirm('هل أنت متأكد من حذف هذا المصدر؟')) {
-                fetch(`/api/sources/${id}`, { method: 'DELETE' }).then(() => loadSources());
-            }
-        }
-        
-        function fetchNews() {
-            document.getElementById('fetch-status').innerHTML = '<div class="loading show"><div class="spinner"></div><p>جاري جلب الأخبار...</p></div>';
-            fetch('/api/fetch', { method: 'POST' }).then(r => r.json()).then(data => {
-                document.getElementById('fetch-status').innerHTML = `<div style="background: #0f1419; padding: 15px; border-radius: 10px; border: 1px solid #27ae60;"><p style="color: #27ae60;">✅ تم جلب ${data.count} خبر</p></div>`;
-                const html = data.news.map(n => `
-                    <div class="news-item">
-                        <p style="color: #e74c3c; font-size: 0.9em; margin-bottom: 5px;">📡 ${n.source_name || n.source}</p>
-                        <p>${n.text}</p>
-                        <div style="margin-top: 10px;">
-                            <button class="btn" style="padding: 5px 15px;" onclick="useNews('${encodeURIComponent(n.text)}')">استخدام</button>
-                            <button class="btn btn-success" style="padding: 5px 15px;" onclick="rewriteAndSendDirect('${encodeURIComponent(n.text)}')">صياغة ونشر</button>
-                        </div>
-                    </div>
-                `).join('');
-                document.getElementById('fetched-news').innerHTML = html;
+        function loadNews() {
+            fetch('/api/news')
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('news-count').textContent = data.length;
+                const html = data.slice(-10).reverse().map(n => '<div class="news-item">' + n.text + '</div>').join('');
+                document.getElementById('news-list').innerHTML = html || '<p style="color: #8899a6;">لا توجد أخبار بعد</p>';
             });
         }
         
-        function useNews(text) {
-            document.getElementById('rewrite-text').value = decodeURIComponent(text);
-            showSection('rewrite');
-            document.querySelectorAll('.nav-btn')[3].classList.add('active');
-        }
-        
-        function rewriteAndSendDirect(encodedText) {
-            const text = decodeURIComponent(encodedText);
-            fetch('/api/rewrite/send', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) })
-            .then(r => r.json()).then(data => { alert(data.success ? '✅ تم الصياغة والنشر بنجاح!' : '❌ فشل: ' + data.message); });
-        }
-        
-        function publishOne() {
-            document.getElementById('auto-publish-status').innerHTML = '<div class="loading show"><div class="spinner"></div><p>جاري جلب وصياغة ونشر خبر...</p></div>';
-            fetch('/api/publish_one', { method: 'POST' }).then(r => r.json()).then(data => {
-                if (data.success) {
-                    document.getElementById('auto-publish-status').innerHTML = `
-                        <div style="background: #0f1419; padding: 15px; border-radius: 10px; border: 1px solid #27ae60;">
-                            <p style="color: #27ae60; margin-bottom: 10px;">✅ تم النشر بنجاح!</p>
-                            <p style="color: #e74c3c; font-size: 0.9em;">المصدر: ${data.source}</p>
-                            <p style="color: #8899a6; font-size: 0.9em; margin-top: 10px;">${data.original}</p>
-                        </div>
-                    `;
-                    loadNews();
-                } else {
-                    document.getElementById('auto-publish-status').innerHTML = '<div style="background: #0f1419; padding: 15px; border-radius: 10px; border: 1px solid #e74c3c;"><p style="color: #e74c3c;">❌ ' + data.message + '</p></div>';
-                }
+        function checkOpenAI() {
+            fetch('/api/status')
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('openai-status').innerHTML = data.openai ? '<span style="color: #27ae60;">✓ متصل</span>' : '<span style="color: #e74c3c;">✗ غير متصل</span>';
             });
         }
         
-        function autoPublish() {
-            if (!confirm('هل تريد نشر أخبار من كل المصادر تلقائياً؟')) return;
-            document.getElementById('auto-publish-status').innerHTML = '<div class="loading show"><div class="spinner"></div><p>جاري النشر التلقائي...</p></div>';
-            fetch('/api/auto_publish', { method: 'POST' }).then(r => r.json()).then(data => {
-                document.getElementById('auto-publish-status').innerHTML = `
-                    <div style="background: #0f1419; padding: 15px; border-radius: 10px; border: 1px solid #27ae60;">
-                        <p style="color: #27ae60; margin-bottom: 10px;">✅ تم نشر ${data.published_count} خبر بنجاح!</p>
-                        ${data.published.map(p => '<p style="color: #8899a6; font-size: 0.9em;">• ' + p.source + ': ' + p.text.substring(0, 50) + '...</p>').join('')}
-                    </div>
-                `;
-                loadNews();
-            });
-        }
+        // Load on start
+        loadSources();
+        loadNews();
+        checkOpenAI();
     </script>
 </body>
 </html>
-'''
+"""
 
 @app.route('/')
 def home():
     return render_template_string(HTML)
-
-@app.route('/api/news', methods=['GET', 'POST'])
-def api_news():
-    if request.method == 'POST':
-        data = request.json
-        text = data.get('text', '')
-        NEWS.append(text)
-        return jsonify({"success": True, "message": "تم إضافة الخبر بنجاح"})
-    return jsonify(NEWS)
-
-@app.route('/api/news/send', methods=['POST'])
-def api_news_send():
-    data = request.json
-    text = data.get('text', '')
-    rewritten = rewrite_with_ai(text)
-    success = send_to_telegram(rewritten)
-    if success:
-        NEWS.append(rewritten)
-        return jsonify({"success": True, "message": "تم إعادة الصياغة والإرسال للقناة بنجاح!", "result": rewritten})
-    else:
-        return jsonify({"success": False, "message": "فشل الإرسال للقناة"})
-
-@app.route('/api/rewrite', methods=['POST'])
-def api_rewrite():
-    data = request.json
-    text = data.get('text', '')
-    rewritten = rewrite_with_ai(text)
-    return jsonify({"success": True, "result": rewritten})
-
-@app.route('/api/rewrite/send', methods=['POST'])
-def api_rewrite_send():
-    data = request.json
-    text = data.get('text', '')
-    rewritten = rewrite_with_ai(text)
-    success = send_to_telegram(rewritten)
-    if success:
-        NEWS.append(rewritten)
-        return jsonify({"success": True, "message": "تم الإرسال بنجاح!", "result": rewritten})
-    else:
-        return jsonify({"success": False, "message": "فشل الإرسال للقناة", "result": rewritten})
-
-@app.route('/api/send', methods=['POST'])
-def api_send():
-    data = request.json
-    text = data.get('text', '')
-    success = send_to_telegram(text)
-    return jsonify({"success": success, "message": "تم الإرسال بنجاح!" if success else "فشل الإرسال"})
 
 @app.route('/api/status')
 def api_status():
@@ -623,107 +462,82 @@ def api_status():
 
 @app.route('/api/sources', methods=['GET', 'POST'])
 def api_sources():
-    data = load_data()
+    global SOURCES
     if request.method == 'POST':
-        req = request.json
+        data = request.json
         new_source = {
-            'id': max([s['id'] for s in data['sources']] + [0]) + 1,
-            'name': req['name'],
-            'username': req['username'].replace('@', ''),
-            'active': True
+            "id": len(SOURCES) + 1,
+            "name": data.get('name', ''),
+            "username": data.get('username', '').replace('@', ''),
+            "active": True
         }
-        data['sources'].append(new_source)
-        save_data(data)
-        return jsonify({'success': True})
-    return jsonify(data['sources'])
+        SOURCES.append(new_source)
+        return jsonify({"message": "تم إضافة المصدر بنجاح"})
+    return jsonify(SOURCES)
 
-@app.route('/api/sources/<int:source_id>', methods=['DELETE'])
-def delete_source(source_id):
-    data = load_data()
-    data['sources'] = [s for s in data['sources'] if s['id'] != source_id]
-    save_data(data)
-    return jsonify({'success': True})
+@app.route('/api/news', methods=['GET', 'POST'])
+def api_news():
+    global NEWS
+    if request.method == 'POST':
+        data = request.json
+        NEWS.append({"id": len(NEWS) + 1, "text": data.get('text', '')})
+        return jsonify({"message": "تم إضافة الخبر"})
+    return jsonify(NEWS)
 
-@app.route('/api/sources/<int:source_id>/toggle', methods=['POST'])
-def toggle_source(source_id):
-    data = load_data()
-    for source in data['sources']:
-        if source['id'] == source_id:
-            source['active'] = not source.get('active', True)
-            break
-    save_data(data)
-    return jsonify({'success': True})
-
-@app.route('/api/fetch', methods=['POST'])
-def api_fetch():
-    data = load_data()
-    all_news = []
-    for source in data['sources']:
-        if source.get('active', True):
-            messages = fetch_channel_messages(source['username'])
-            for msg in messages:
-                msg['source_name'] = source['name']
-                all_news.append(msg)
-    data['fetched_news'] = all_news[:20]
-    save_data(data)
-    return jsonify({'success': True, 'count': len(all_news), 'news': all_news})
-
-@app.route('/api/fetched')
-def api_fetched():
-    data = load_data()
-    return jsonify(data.get('fetched_news', []))
-
-@app.route('/api/auto_publish', methods=['POST'])
-def api_auto_publish():
-    """جلب الأخبار وصياغتها ونشرها تلقائياً"""
-    data = load_data()
-    published = []
-    errors = []
+@app.route('/api/news/send', methods=['POST'])
+def api_news_send():
+    data = request.json
+    text = data.get('text', '')
     
-    for source in data['sources']:
-        if source.get('active', True):
-            messages = fetch_channel_messages(source['username'])
-            for msg in messages[:2]:  # أول خبرين من كل مصدر
-                try:
-                    # إعادة الصياغة
-                    rewritten = rewrite_with_ai(msg['text'])
-                    # النشر
-                    success = send_to_telegram(rewritten)
-                    if success:
-                        published.append({'source': source['name'], 'text': msg['text'][:100]})
-                        NEWS.append(rewritten)
-                except Exception as e:
-                    errors.append({'source': source['name'], 'error': str(e)})
+    if is_ad(text):
+        return jsonify({"success": False, "message": "تم تجاهل الخبر - يبدو أنه إعلان"})
     
-    return jsonify({
-        'success': True,
-        'published_count': len(published),
-        'published': published,
-        'errors': errors
-    })
+    rewritten = rewrite_with_ai(text)
+    
+    if send_to_telegram(rewritten):
+        NEWS.append({"id": len(NEWS) + 1, "text": rewritten})
+        return jsonify({"success": True, "message": "تم إرسال الخبر للقناة", "result": rewritten})
+    else:
+        return jsonify({"success": False, "message": "فشل إرسال الخبر"})
 
-@app.route('/api/publish_one', methods=['POST'])
+@app.route('/api/rewrite', methods=['POST'])
+def api_rewrite():
+    data = request.json
+    text = data.get('text', '')
+    rewritten = rewrite_with_ai(text)
+    return jsonify({"result": rewritten})
+
+@app.route('/api/rewrite/send', methods=['POST'])
+def api_rewrite_send():
+    data = request.json
+    text = data.get('text', '')
+    
+    if is_ad(text):
+        return jsonify({"success": False, "message": "تم تجاهل الخبر - يبدو أنه إعلان"})
+    
+    rewritten = rewrite_with_ai(text)
+    
+    if send_to_telegram(rewritten):
+        NEWS.append({"id": len(NEWS) + 1, "text": rewritten})
+        return jsonify({"success": True, "message": "تم إرسال الخبر للقناة", "result": rewritten})
+    else:
+        return jsonify({"success": False, "message": "فشل إرسال الخبر"})
+
+@app.route('/api/publish/one', methods=['POST'])
 def api_publish_one():
-    """جلب خبر واحد عشوائي وصياغته ونشره"""
-    data = load_data()
+    # Demo news for testing
+    demo_news = "وزير الحرب الإسرائيلي يسرائيل كاتس ورئيس الأركان ايال زامير يجريان مناورة تحاكي اندلاع حرب مع إيران"
     
-    for source in data['sources']:
-        if source.get('active', True):
-            messages = fetch_channel_messages(source['username'])
-            if messages:
-                msg = messages[0]
-                rewritten = rewrite_with_ai(msg['text'])
-                success = send_to_telegram(rewritten)
-                if success:
-                    NEWS.append(rewritten)
-                    return jsonify({
-                        'success': True,
-                        'source': source['name'],
-                        'original': msg['text'][:200],
-                        'rewritten': rewritten
-                    })
+    if is_ad(demo_news):
+        return jsonify({"success": False, "message": "تم تجاهل الخبر - يبدو أنه إعلان"})
     
-    return jsonify({'success': False, 'message': 'لا توجد أخبار جديدة'})
+    rewritten = rewrite_with_ai(demo_news)
+    
+    if send_to_telegram(rewritten):
+        NEWS.append({"id": len(NEWS) + 1, "text": rewritten})
+        return jsonify({"success": True, "message": "تم نشر الخبر!", "result": rewritten})
+    else:
+        return jsonify({"success": False, "message": "فشل إرسال الخبر"})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
